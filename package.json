@@ -1,0 +1,10 @@
+{
+  "name": "dobby-reminder-bot",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "@line/bot-sdk": "^9.0.0",
+    "@upstash/redis": "^1.28.3",
+    "chrono-node": "^2.7.6"
+  }
+}
