@@ -2,21 +2,20 @@ import { Redis } from '@upstash/redis';
 import { Client } from '@line/bot-sdk';
 import * as chrono from 'chrono-node';
 
-// 連接 Redis（我們等一下會把 URL/TOKEN 放在 Vercel 環境變數）
-// 這裡不要手動寫死，把秘密放環境變數才安全
+// 連接 Redis（雲端記事本）
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
   token: process.env.UPSTASH_REDIS_REST_TOKEN,
 });
 
-// 連接 LINE Bot
+// 連接 LINE Bot，用來回訊息
 const lineClient = new Client({
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
 });
 
-// LINE 的 webhook 會 POST 訊息到這支 API
 export default async function handler(req, res) {
   try {
+    // LINE 的 webhook 只會用 POST
     if (req.method !== 'POST') {
       res.status(405).send('Method Not Allowed');
       return;
@@ -24,36 +23,38 @@ export default async function handler(req, res) {
 
     const events = req.body.events || [];
 
+    // 處理每一個 event（訊息、加好友等等）
     for (const event of events) {
-      // 我們只處理使用者傳來的文字訊息
-      if (event.type === 'message' && event.message.type === 'text') {
+      // 我們只管文字訊息
+      if (event.type === 'message' && event.message?.type === 'text') {
         const userId = event.source.userId;
         const userText = event.message.text;
+        const replyToken = event.replyToken;
 
-        // 用 chrono-node 試著讀時間
+        // 嘗試把訊息解析成提醒
         const parsed = parseReminder(userText);
 
+        // 如果解析不出時間，就教用戶怎麼講
         if (!parsed) {
-          // 如果聽不懂，就教他怎麼講
-          await replyText(
-            event.replyToken,
+          await replyText(replyToken,
             "我可以幫你記提醒唷 🙋\n試試說：\n「明天晚上8點提醒我帶藥」\n「週五下午3點叫我傳報告」"
           );
           continue;
         }
 
-        // 把提醒存進 Redis，用 sorted set 依時間排序
+        // 時間（毫秒）當成排序用的 score
         const remindAtMs = parsed.time.getTime();
         const listKey = `reminders:${userId}`;
 
+        // 存進 Redis 的 sorted set，之後 cron 會掃這個列表
         await redis.zadd(listKey, {
           score: remindAtMs,
           member: parsed.task,
         });
 
-        // 回覆使用者，確認已經記下了
+        // 回覆使用者設定成功
         await replyText(
-          event.replyToken,
+          replyToken,
           [
             "✅ 提醒已記下！",
             `🕓 時間：${formatTimeForHuman(parsed.time)}`,
@@ -65,36 +66,40 @@ export default async function handler(req, res) {
       }
     }
 
+    // 告訴 LINE：我們處理好了
     res.status(200).send('OK');
   } catch (err) {
     console.error('webhook error', err);
+    // 告訴 LINE：我們出錯（LINE 會重送，所以沒關係）
     res.status(500).send('Error');
   }
 }
 
-// 回覆當下這句訊息（不是推播，是直接回覆）
+// 正確的回覆 helper：replyToken 是字串，messages 是陣列
 async function replyText(replyToken, text) {
   return lineClient.replyMessage({
     replyToken,
-    messages: [{ type: 'text', text }],
+    messages: [
+      { type: 'text', text },
+    ],
   });
 }
 
-// 把自然語言轉成 {time: Date, task: string}
+// 把使用者的句子像「明天晚上8點提醒我帶藥」→ 解析出時間 + 內容
 function parseReminder(text) {
-  // forwardDate: true = 如果沒講日期，就抓最近的未來（避免抓到過去）
+  // chrono 會找文字裡的「時間」片段
   const results = chrono.parse(text, new Date(), { forwardDate: true });
   if (!results || results.length === 0) return null;
 
   const best = results[0];
-  const time = best.date(); // Date 物件
+  const time = best.date(); // 轉成 Date 物件
 
-  // 把時間這一段文字拿掉，剩下的就是任務內容
+  // 從原句子裡扣掉解析到的時間這一段，剩下的就是任務內容
   const timeText = text.slice(best.index, best.index + best.text.length);
-  let task = text.replace(timeText, '');
 
-  // 清除常見垃圾詞
-  task = task.replace(/(提醒我|叫我|記得|幫我|提醒一下|提醒|一下)/g, '');
+  let task = text.replace(timeText, '');
+  // 清掉「提醒我/叫我/幫我/...」這些口語字
+  task = task.replace(/(提醒我|叫我|幫我|提醒一下|記得|提醒|一下)/g, '');
   task = task.trim();
 
   if (!task) {
@@ -104,7 +109,7 @@ function parseReminder(text) {
   return { time, task };
 }
 
-// 把 Date 轉成人看得懂的文字
+// 讓時間顯示漂亮一點
 function formatTimeForHuman(dateObj) {
   const yyyy = dateObj.getFullYear();
   const mm = String(dateObj.getMonth() + 1).padStart(2, '0');
