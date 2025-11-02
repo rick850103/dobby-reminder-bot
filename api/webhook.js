@@ -1,6 +1,6 @@
 import { Redis } from '@upstash/redis';
 import { Client } from '@line/bot-sdk';
-import chrono from 'chrono-node';
+import * as chrono from 'chrono-node';
 
 // 連接 Redis（我們等一下會把 URL/TOKEN 放在 Vercel 環境變數）
 // 這裡不要手動寫死，把秘密放環境變數才安全
