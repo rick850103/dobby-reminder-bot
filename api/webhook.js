@@ -1,56 +1,51 @@
-// api/webhook.js
 import { Client } from '@line/bot-sdk';
 
-// 連到 LINE，等一下要用它回訊息
+// 用環境變數的 token 連到 LINE
 const lineClient = new Client({
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
 });
 
-// 告訴 Vercel：這支函式只跑在「Edge Function」以外的 Node runtime
-// （避免某些平台差異，這是保險用，但不加通常也沒關係）
-// export const config = {
-//   runtime: 'nodejs18.x',
-// };
-
+// 主入口：LINE 會 POST 到這裡
 export default async function handler(req, res) {
   try {
-    // LINE webhook 只會用 POST
+    // 只允許 POST，其他的直接擋掉
     if (req.method !== 'POST') {
       res.status(405).send('Method Not Allowed');
       return;
     }
 
-    // LINE 會把所有事件丟在 body.events 這個陣列裡
-    const events = req.body.events || [];
+    // LINE 送來的事件列表
+    const events = req.body?.events || [];
 
-    // 我們逐一處理
+    // 逐一處理事件
     for (const event of events) {
-      // 只處理「使用者傳文字訊息」這種情況
+      // 我們只處理使用者傳來的文字訊息
       if (event.type === 'message' && event.message?.type === 'text') {
         const replyToken = event.replyToken;
+        const userText = event.message.text || '';
 
-        // 回一句固定文字，先證明 webhook 正常能回
-        await replyText(replyToken, `我在這 👋\n你剛剛說的是：「${event.message.text}」`);
+        // 統一回一段簡單文字
+        await replyText(replyToken, `我在這 👋\n你剛剛說：「${userText}」`);
       }
     }
 
-    // 告訴 LINE：我收到了，別重送
+    // 回 200 給 LINE，代表「我收到了，不要重送」
     res.status(200).send('OK');
   } catch (err) {
     console.error('webhook error', err);
-    // 出錯就回 500，讓我們在 log 看到
+    // 出錯就回 500
     res.status(500).send('Error');
   }
 }
 
-// 幫你把訊息回給使用者的 helper
+// 小工具：用 replyToken 回訊息給用戶
 async function replyText(replyToken, text) {
   return lineClient.replyMessage({
-    replyToken, // 必須是字串
+    replyToken,
     messages: [
       {
         type: 'text',
-        text, // 回覆內容
+        text,
       },
     ],
   });
